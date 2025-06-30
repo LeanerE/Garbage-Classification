@@ -1,0 +1,39 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore VS Code settings (optional)
+.vscode/
+
+# Ignore virtual environments
+venv/
+env/
+
+# Ignore dataset folders
+database/
+data/
+*.db
+
+# Ignore model weight files
+*.h5
+*.hdf5
+*.keras
+*.ckpt
+*.pt
+*.pth
+
+# Ignore log files
+*.log
+logs/
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore temporary files
+*.tmp
+*.swp
