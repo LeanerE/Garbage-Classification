@@ -11,7 +11,7 @@ __pycache__/
 
 # Ignore virtual environments
 venv/
-env/
+*env
 
 # Ignore dataset folders
 database/
@@ -21,7 +21,6 @@ data/
 # Ignore model weight files
 *.h5
 *.hdf5
-*.keras
 *.ckpt
 *.pt
 *.pth
