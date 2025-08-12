@@ -90,7 +90,7 @@ if is_authenticated and user_type != 'admin':
             
             with col4:
                 avg_confidence = sum([pred[3] for pred in user_predictions]) / len(user_predictions)
-                st.metric("Average Confidence", f"{avg_confidence:.1f}%")
+                st.metric("Average Confidence", f"{avg_confidence*100:.1f}%")
             
             # Classification statistics charts
             if len(category_counts) > 0:
@@ -111,7 +111,8 @@ if is_authenticated and user_type != 'admin':
                         y=category_counts.values,
                         title="Predictions by Category",
                         color=category_counts.values,
-                        color_continuous_scale="viridis"
+                        color_continuous_scale="viridis",
+                        labels={'x': 'Category', 'y': 'Count'}
                     )
                     fig_bar.update_layout(showlegend=False)
                     st.plotly_chart(fig_bar, use_container_width=True)
@@ -142,12 +143,9 @@ elif is_authenticated and user_type == 'admin':
     st.markdown("## Administrator Console")
     st.info("Welcome back, Administrator! Click the sidebar to access management functions.")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Enter Admin Panel", type="primary", use_container_width=True):
-            st.switch_page("pages/admin.py")
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("User Management", use_container_width=True):
+        if st.button("Enter Admin Panel", type="primary", use_container_width=True):
             st.switch_page("pages/admin.py")
 
 else:

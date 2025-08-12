@@ -6,17 +6,15 @@ from utils.db_utils import save_prediction
 
 st.title("Upload Image for Classification")
 
-# Check authentication
+# Authentication check
 if not st.session_state.get('authenticated'):
     st.warning("You must log in first.")
-    st.markdown("Please go to the Login page to authenticate.")
     st.page_link("pages/login.py", label="Login")
     st.stop()
 
-# Check if user is admin (admin should not access user upload page)
+# Admin access check
 if st.session_state.get('user_type') == 'admin':
     st.error("Access denied. This page is for regular users only.")
-    st.info("Admin users should use the Admin Panel for system management.")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Go to Admin Panel", type="primary"):
@@ -26,7 +24,7 @@ if st.session_state.get('user_type') == 'admin':
             st.switch_page("app.py")
     st.stop()
 
-# Show user info and logout option
+# User info and logout
 if st.session_state.get('user'):
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -37,17 +35,14 @@ if st.session_state.get('user'):
             st.session_state['user'] = None
             st.switch_page("pages/login.py")
 
-# Initialize classifier (load models once)
+# Initialize classifier
 @st.cache_resource
 def load_classifier():
     return GarbageClassifier()
 
 classifier = load_classifier()
 
-# Main upload functionality
-st.markdown("---")
-st.subheader("Choose an image to classify")
-
+# File upload
 uploaded_file = st.file_uploader(
     "Select an image file", 
     type=["jpg", "jpeg", "png"],
@@ -55,16 +50,13 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    st.markdown("---")
-    st.subheader("Preview")
-    st.image(uploaded_file, caption="Uploaded Image", use_container_width=True,width=100)
-
-    # Prediction section
-    st.markdown("---")
-    st.subheader("Analysis Results")
+    # Show image with fixed size
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image(uploaded_file, caption="Uploaded Image", width=400)
     
-    with st.spinner("Analyzing image with AI models..."):
-        # Make prediction
+    # Auto-analyze
+    with st.spinner("Analyzing image..."):
         prediction_result = classifier.predict_single(uploaded_file)
         
         if prediction_result:
@@ -72,20 +64,16 @@ if uploaded_file:
             confidence = prediction_result['confidence']
             top_predictions = prediction_result['top_predictions']
             
-            # Save prediction result to database
+            # Save to database
             if st.session_state.get('authenticated') and st.session_state.get('user'):
                 try:
-                    # Convert image to base64 string
                     image_bytes = uploaded_file.getvalue()
                     image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-                    
-                    # Generate unique filename (just for reference)
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     file_extension = uploaded_file.name.split('.')[-1] if '.' in uploaded_file.name else 'jpg'
                     image_filename = f"prediction_{timestamp}.{file_extension}"
                     
-                    # Save to database with the image data
-                    save_success = save_prediction(
+                    save_prediction(
                         st.session_state['user'],
                         image_filename,
                         predicted_class,
@@ -93,21 +81,14 @@ if uploaded_file:
                         top_predictions,
                         image_base64
                     )
-                    
-                    if save_success:
-                        st.success("Prediction saved to your history!")
-                        # Add a view history button
-                        if st.button("View History"):
-                            st.switch_page("pages/history.py")
-                    else:
-                        st.warning("Failed to save prediction to history.")
                 except Exception as e:
-                    st.error(f"Failed to save prediction: {str(e)}")
+                    st.warning(f"Failed to save: {str(e)}")
             
-            # Get recycling information
+            # Get recycling info
             recycling_info = classifier.get_recycling_info(predicted_class)
             
-            # Display main results
+            # Display results
+            st.markdown("---")
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Confidence", f"{confidence:.1%}")
@@ -116,55 +97,23 @@ if uploaded_file:
             with col3:
                 st.metric("Waste Type", recycling_info['category'])
             
-            # Display detailed classification
-            st.markdown("**Detailed Classification:**")
-            
-            # Create a more detailed info box
-            info_text = f"""
-            - **Primary Category:** {predicted_class.title()}
-            - **Waste Classification:** {recycling_info['category']}
-            - **Environmental Impact:** {recycling_info['impact']}
-            - **Disposal Instructions:** {recycling_info['instructions']}
-            """
-            st.info(info_text)
-            
-            # Show top 3 predictions
-            st.markdown("**Model Confidence Rankings:**")
-            for i, (class_name, prob) in enumerate(top_predictions, 1):
-                st.write(f"{i}. **{class_name.title()}**: {prob:.1%}")
-            
-            # Show recycling tips based on category
-            st.markdown("**Recycling Tips:**")
+            # Recycling guidance
             if recycling_info['category'] == 'Recyclable':
-                st.success(f"This {predicted_class} can be recycled! {recycling_info['instructions']}")
+                st.success(f"This {predicted_class} can be recycled. {recycling_info['instructions']}")
             elif recycling_info['category'] == 'Hazardous Waste':
-                st.error(f"⚠️ This {predicted_class} is hazardous waste. {recycling_info['instructions']}")
+                st.error(f"This {predicted_class} is hazardous waste. {recycling_info['instructions']}")
             elif recycling_info['category'] == 'Organic Waste':
                 st.warning(f"This {predicted_class} is organic waste. {recycling_info['instructions']}")
-            elif recycling_info['category'] == 'Textile Waste':
-                st.info(f"This {predicted_class} is textile waste. {recycling_info['instructions']}")
             else:
-                st.warning(f"This {predicted_class} should be disposed of as general waste. {recycling_info['instructions']}")
+                st.info(f"This {predicted_class} should be disposed as general waste. {recycling_info['instructions']}")
+            
+            # Top predictions
+            st.markdown("**Top Predictions:**")
+            for i, (class_name, prob) in enumerate(top_predictions[:3], 1):
+                st.write(f"{i}. {class_name.title()}: {prob:.1%}")
                 
         else:
-            st.error("Failed to analyze the image. Please try again with a different image.")
+            st.error("Failed to analyze the image. Please try again.")
 
 else:
-    # Show instructions for use
-    st.info("""
-    **How to use:**
-    1. Click 'Browse files' above to select an image
-    2. Choose a clear photo of the item you want to classify
-    3. Wait for the AI analysis to complete (uses 3 different models)
-    4. View the classification results and recycling tips
-    """)
-    
-    # Example photo captions
-    st.markdown("**Tips for best results:**")
-    st.markdown("""
-    - Take photos in good lighting
-    - Ensure the item is clearly visible
-    - Avoid blurry or dark images
-    - Include the entire item in the frame
-    - Supported categories: battery, biological, cardboard, clothes, glass, metal, paper, plastic, shoes, trash
-    """)
+    st.info("Upload an image to get started. Supported formats: JPG, JPEG, PNG")
