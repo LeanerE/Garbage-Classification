@@ -230,7 +230,7 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; padding: 1rem;">
-    <p>AI Garbage Classification System | Making Environmental Protection Smarter | © 2024</p>
+    <p>AI Garbage Classification System | Making Environmental Protection Smarter | © 2025</p>
     <p><small>Based on Deep Learning Technology • Supports 10 Waste Categories • 90%+ Accuracy</small></p>
 </div>
 """, unsafe_allow_html=True)
