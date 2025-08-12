@@ -1,3 +1,5 @@
+import base64
+import io
 import streamlit as st
 import json
 from datetime import datetime
@@ -108,48 +110,58 @@ start_idx = (current_page - 1) * max_display
 end_idx = min(start_idx + max_display, total_filtered)
 predictions_to_show = filtered_predictions[start_idx:end_idx]
 
-for i, pred in enumerate(predictions_to_show):
-    pred_id, image_filename, predicted_class, confidence, top_predictions_json, created_at, user_name = pred
-    
-    # Parse top predictions
+for pred in predictions_to_show:
     try:
-        top_predictions = json.loads(top_predictions_json)
-    except:
-        top_predictions = []
-    
-    # Create expandable section for each prediction
-    with st.expander(f"{predicted_class.title()} - {confidence:.1%} - {created_at}"):
-        col1, col2, col3 = st.columns([2, 2, 1])
-        
-        with col1:
-            # Display the uploaded image
-            try:
-                # Construct the image path - assuming images are stored in uploads folder
-                image_path = f"uploads/{image_filename}"
-                st.image(image_path, caption=f"Uploaded: {image_filename}", use_container_width=True)
-            except Exception as e:
-                st.error(f"Image not found: {image_filename}")
-                st.write(f"**Image:** {image_filename}")
-        
-        with col2:
-            st.write(f"**Predicted Class:** {predicted_class.title()}")
-            st.write(f"**Confidence:** {confidence:.1%}")
-            st.write(f"**Date:** {created_at}")
+        pred_id = pred[0]
+        image_filename = pred[1]
+        predicted_class = pred[2]
+        confidence = pred[3]
+        top_predictions_str = pred[4]
+        created_at = pred[5]
+        user_name = pred[6]
+        image_data = pred[7] if len(pred) > 7 else None
+
+        with st.expander(f"{predicted_class.title()} - {confidence:.1%} - {created_at}"):
+            col1, col2, col3 = st.columns([2, 2, 1])
             
-            # Show top predictions if available
-            if top_predictions:
-                st.write("**Top Predictions:**")
-                for j, (class_name, prob) in enumerate(top_predictions[:3], 1):
-                    st.write(f"  {j}. {class_name.title()}: {prob:.1%}")
-        
-        with col3:
-            # Delete button
-            if st.button(f"Delete", key=f"delete_{pred_id}"):
-                if delete_prediction(pred_id, st.session_state['user']):
-                    st.success("Prediction deleted!")
-                    st.rerun()
-                else:
-                    st.error("Failed to delete prediction.")
+            with col1:
+                try:
+                    if image_data:
+                        image_bytes = base64.b64decode(image_data)
+                        st.image(
+                            io.BytesIO(image_bytes),
+                            caption=f"Prediction: {predicted_class}",
+                            use_container_width=True
+                        )
+                    else:
+                        st.error("Image not available")
+                except Exception as e:
+                    st.error(f"Error displaying image: {str(e)}")
+            
+            with col2:
+                st.write(f"**Predicted Class:** {predicted_class.title()}")
+                st.write(f"**Confidence:** {confidence:.1%}")
+                st.write(f"**Date:** {created_at}")
+                
+                try:
+                    top_predictions = json.loads(top_predictions_str)
+                    st.write("**Top Predictions:**")
+                    for i, (class_name, prob) in enumerate(top_predictions[:3], 1):
+                        st.write(f"{i}. {class_name.title()}: {prob:.1%}")
+                except:
+                    pass
+            
+            with col3:
+                if st.button("Delete", key=f"delete_{pred_id}"):
+                    if delete_prediction(pred_id, st.session_state['user']):
+                        st.success("Deleted successfully!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete")
+
+    except Exception as e:
+        st.error(f"Error processing prediction: {str(e)}")
+        continue
 
 # Show statistics
 st.markdown("---")

@@ -1,10 +1,8 @@
+import base64
 import streamlit as st
-import time
-import os
 from datetime import datetime
 from utils.prediction_utils import GarbageClassifier
 from utils.db_utils import save_prediction
-import numpy as np
 
 st.title("Upload Image for Classification")
 
@@ -37,7 +35,6 @@ if st.session_state.get('user'):
         if st.button("Logout", type="secondary"):
             st.session_state['authenticated'] = False
             st.session_state['user'] = None
-            st.success("Logged out successfully!")
             st.switch_page("pages/login.py")
 
 # Initialize classifier (load models once)
@@ -60,8 +57,8 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
     st.markdown("---")
     st.subheader("Preview")
-    st.image(uploaded_file, caption="Uploaded Image", use_container_width=True)
-    
+    st.image(uploaded_file, caption="Uploaded Image", use_container_width=True,width=100)
+
     # Prediction section
     st.markdown("---")
     st.subheader("Analysis Results")
@@ -77,41 +74,35 @@ if uploaded_file:
             
             # Save prediction result to database
             if st.session_state.get('authenticated') and st.session_state.get('user'):
-                # Generate unique filename
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                file_extension = uploaded_file.name.split('.')[-1] if '.' in uploaded_file.name else 'jpg'
-                image_filename = f"prediction_{timestamp}.{file_extension}"
-                
-                # Create uploads directory if it doesn't exist
-                uploads_dir = "uploads"
-                if not os.path.exists(uploads_dir):
-                    os.makedirs(uploads_dir)
-                
-                # Save the image file to disk
-                image_path = os.path.join(uploads_dir, image_filename)
                 try:
-                    with open(image_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                except Exception as e:
-                    st.error(f"Failed to save image file: {e}")
-                    image_filename = None
-                
-                # Save to database only if image was saved successfully
-                if image_filename:
+                    # Convert image to base64 string
+                    image_bytes = uploaded_file.getvalue()
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                    
+                    # Generate unique filename (just for reference)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    file_extension = uploaded_file.name.split('.')[-1] if '.' in uploaded_file.name else 'jpg'
+                    image_filename = f"prediction_{timestamp}.{file_extension}"
+                    
+                    # Save to database with the image data
                     save_success = save_prediction(
                         st.session_state['user'],
                         image_filename,
                         predicted_class,
                         confidence,
-                        top_predictions
+                        top_predictions,
+                        image_base64
                     )
                     
                     if save_success:
                         st.success("Prediction saved to your history!")
+                        # Add a view history button
+                        if st.button("View History"):
+                            st.switch_page("pages/history.py")
                     else:
                         st.warning("Failed to save prediction to history.")
-                else:
-                    st.error("Failed to save image file.")
+                except Exception as e:
+                    st.error(f"Failed to save prediction: {str(e)}")
             
             # Get recycling information
             recycling_info = classifier.get_recycling_info(predicted_class)

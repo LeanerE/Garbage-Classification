@@ -21,7 +21,6 @@ if st.session_state.get('authenticated'):
                 st.session_state['authenticated'] = False
                 st.session_state['user'] = None
                 st.session_state['user_type'] = None
-                st.success("Logged out successfully!")
                 st.rerun()
     else:
         st.success(f"Welcome back, {st.session_state.get('user_name', st.session_state.get('user'))}!")

@@ -1,10 +1,15 @@
 import streamlit as st
-import sqlite3
-import json
+import pandas as pd
+from pymongo import MongoClient
 from datetime import datetime
-from utils.db_utils import get_all_user_predictions, get_user_predictions_by_email
+from utils.db_utils import get_all_user_predictions
+from config import MONGO_URI, MONGO_DB_NAME
 
 st.title("Admin Panel")
+
+# MongoDB connection
+client = MongoClient(MONGO_URI)
+db = client[MONGO_DB_NAME]
 
 # Check if it is admin
 if not st.session_state.get('authenticated') or st.session_state.get('user_type') != 'admin':
@@ -26,24 +31,12 @@ page = st.sidebar.selectbox(
 if page == "Dashboard":
     st.header("Admin Dashboard")
     
-    # Getting database statistics
-    conn = sqlite3.connect("database/garbage.db")
-    c = conn.cursor()
-    
     try:
-        # 
-        c.execute("SELECT COUNT(*) FROM users")
-        total_users = c.fetchone()[0]
-        
-        c.execute("SELECT COUNT(*) FROM users WHERE is_verified = 1")
-        verified_users = c.fetchone()[0]
-        
-        c.execute("SELECT COUNT(*) FROM users WHERE is_verified = 0")
-        unverified_users = c.fetchone()[0]
-        
-        # Get total predictions count
-        c.execute("SELECT COUNT(*) FROM predictions")
-        total_predictions = c.fetchone()[0]
+        # Get database statistics using MongoDB aggregation
+        total_users = db.users.count_documents({})
+        verified_users = db.users.count_documents({"is_verified": 1})
+        unverified_users = db.users.count_documents({"is_verified": 0})
+        total_predictions = db.predictions.count_documents({})
         
         # User statistics
         col1, col2, col3, col4 = st.columns(4)
@@ -58,61 +51,57 @@ if page == "Dashboard":
         
         # Recently registered users
         st.subheader("Recent Registrations")
-        c.execute("SELECT name, email, created_at, is_verified FROM users ORDER BY created_at DESC LIMIT 10")
-        recent_users = c.fetchall()
+        recent_users = list(db.users.find().sort("created_at", -1).limit(10))
         
         if recent_users:
             for user in recent_users:
-                status = "Verified" if user[3] else "Unverified"
-                created_at = user[2] if user[2] else "Unknown"
-                name = user[0] if user[0] else user[1]
-                st.write(f"**{name}** ({user[1]}) - {created_at} - {status}")
+                status = "Verified" if user.get("is_verified") else "Unverified"
+                created_at = user.get("created_at", "Unknown")
+                name = user.get("name", user.get('email'))
+                st.write(f"**{name}** ({user.get('email')}) - {created_at} - {status}")
         else:
             st.info("No users found.")
     
     except Exception as e:
         st.error(f"Error accessing database: {e}")
-    
-    finally:
-        conn.close()
 
 elif page == "User Management":
     st.header("User Management")
     
-    conn = sqlite3.connect("database/garbage.db")
-    c = conn.cursor()
-    
     try:
         # Get all users
-        c.execute("SELECT name, email, is_verified, created_at FROM users ORDER BY created_at DESC")
-        users = c.fetchall()
+        users = list(db.users.find().sort("created_at", -1))
+
         
         if users:
             st.subheader("All Users")
             
             for i, user in enumerate(users):
-                name = user[0] if user[0] else user[1]
+                name = user.get("name") if user.get("name") else user.get("email")
                 with st.expander(f"User: {name}"):
                     col1, col2 = st.columns([3, 1])
                     
                     with col1:
                         st.write(f"**Name:** {name}")
-                        st.write(f"**Email:** {user[1]}")
-                        st.write(f"**Status:** {'Verified' if user[2] else 'Unverified'}")
-                        created_at = user[3] if user[3] else "Unknown"
+                        st.write(f"**Email:** {user.get('email')}")
+                        st.write(f"**Status:** {'Verified' if user.get('is_verified') else 'Unverified'}")
+                        created_at = user.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if user.get("created_at") else "Unknown"
                         st.write(f"**Registered:** {created_at}")
                     
                     with col2:
                         if st.button(f"Delete User", key=f"delete_{i}"):
-                            c.execute("DELETE FROM users WHERE email = ?", (user[1],))
-                            conn.commit()
+                            db.users.delete_one({"email": user.get("email")})
+                            # Also delete user's predictions
+                            db.predictions.delete_many({"user_email": user.get("email")})
                             st.success(f"User {name} deleted!")
                             st.rerun()
-                        
-                        if not user[2]:  # If user is not authenticated
+
+                        if not user.get("is_verified"):  # If user is not authenticated
                             if st.button(f"Verify User", key=f"verify_{i}"):
-                                c.execute("UPDATE users SET is_verified = 1 WHERE email = ?", (user[1],))
-                                conn.commit()
+                                db.users.update_one(
+                                    {"email": user.get("email")},
+                                    {"$set": {"is_verified": 1}}
+                                )
                                 st.success(f"User {name} verified!")
                                 st.rerun()
         else:
@@ -122,10 +111,14 @@ elif page == "User Management":
         st.subheader("Export Data")
         if st.button("Export Users to CSV"):
             try:
-                import pandas as pd
-                c.execute("SELECT name, email, is_verified, created_at FROM users")
-                data = c.fetchall()
-                df = pd.DataFrame(data, columns=['Name', 'Email', 'Verified', 'Created At'])
+                users_data = list(db.users.find({}, {
+                                    "_id": 0,
+                                    "name": 1,
+                                    "email": 1,
+                                    "is_verified": 1,
+                                    "created_at": 1
+                                }))
+                df = pd.DataFrame(users_data)
                 csv = df.to_csv(index=False)
                 st.download_button(
                     label="Download CSV",
@@ -138,9 +131,6 @@ elif page == "User Management":
     
     except Exception as e:
         st.error(f"Error accessing database: {e}")
-    
-    finally:
-        conn.close()
 
 elif page == "User Predictions":
     st.header("User Predictions History")
@@ -215,7 +205,7 @@ elif page == "User Predictions":
     
     for i, user in enumerate(filtered_users):
         with st.expander(f"{user['name']} - {user['total_predictions']} predictions - Last: {user['last_activity']}"):
-            col1, col2, col3 = st.columns([2, 2, 1])
+            col1, col2 = st.columns([1, 1])
             
             with col1:
                 st.write(f"**User:** {user['name']}")
@@ -230,54 +220,6 @@ elif page == "User Predictions":
                 for class_name, count in sorted_classes[:3]:
                     percentage = (count / user['total_predictions']) * 100
                     st.write(f"• {class_name.title()}: {count} ({percentage:.1f}%)")
-            
-            with col3:
-                if st.button(f"View Details", key=f"view_details_{i}"):
-                    st.session_state['view_user_email'] = user['email']
-                    st.rerun()
-    
-    # Show specific user detailed history if requested
-    if st.session_state.get('view_user_email'):
-        st.markdown("---")
-        st.subheader(f"Detailed History for {st.session_state['view_user_email']}")
-        
-        user_predictions = get_user_predictions_by_email(st.session_state['view_user_email'])
-        
-        if user_predictions:
-            # Show user summary
-            user_email = st.session_state['view_user_email']
-            user_info = user_stats.get(user_email, {})
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Predictions", user_info.get('total_predictions', 0))
-            with col2:
-                st.metric("Average Confidence", f"{user_info.get('avg_confidence', 0):.1%}")
-            with col3:
-                most_common = max(user_info.get('class_counts', {}).items(), key=lambda x: x[1])[0] if user_info.get('class_counts') else "None"
-                st.metric("Most Predicted", most_common.title())
-            
-            # Show detailed predictions
-            st.write("**Recent Predictions:**")
-            for pred in user_predictions[:10]:  # Show last 10 predictions
-                pred_id, image_filename, predicted_class, confidence, top_predictions_json, created_at, user_name, user_email = pred
-                
-                try:
-                    top_predictions = json.loads(top_predictions_json)
-                except:
-                    top_predictions = []
-                
-                with st.expander(f"{predicted_class.title()} - {confidence:.1%} - {created_at}"):
-                    st.write(f"**Image:** {image_filename}")
-                    st.write(f"**Confidence:** {confidence:.1%}")
-                    if top_predictions:
-                        st.write("**Top Predictions:**")
-                        for j, (class_name, prob) in enumerate(top_predictions[:3], 1):
-                            st.write(f"  {j}. {class_name.title()}: {prob:.1%}")
-        
-        if st.button("Back to User Summary"):
-            st.session_state['view_user_email'] = None
-            st.rerun()
 
 # logout function
 st.sidebar.markdown("---")
@@ -285,5 +227,4 @@ if st.sidebar.button("Logout"):
     st.session_state['authenticated'] = False
     st.session_state['user'] = None
     st.session_state['user_type'] = None
-    st.success("Logged out successfully!")
     st.switch_page("pages/login.py") 

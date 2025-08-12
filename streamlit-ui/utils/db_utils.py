@@ -1,242 +1,224 @@
 import random
-import sqlite3
 import string
 import json
+from datetime import datetime
+from pymongo import MongoClient
+from bson.objectid import ObjectId
 from utils.auth_utils import send_verification_email
-from utils.sql_utils import execute_sql_file
-from config import ADMIN_EMAIL, ADMIN_PASSWORD
+from config import ADMIN_EMAIL, ADMIN_PASSWORD, MONGO_URI, MONGO_DB_NAME
 
-DB_PATH = "database/garbage.db"
-SCHEMA_PATH = "schema.sql"
+# MongoDB connection
+client = MongoClient(MONGO_URI)
+db = client[MONGO_DB_NAME]
 
-def init_db_schema_if_needed():
-    execute_sql_file(DB_PATH, SCHEMA_PATH)
+# Collections
+users_collection = db['users']
+predictions_collection = db['predictions']
 
-# Generate a 6-digit numeric code
 def generate_code(length=6):
+    # Generate a verification code
     return ''.join(random.choices(string.digits, k=length))
 
-# Check if user is admin
 def is_admin(email, password):
+    # Check if user is admin
     return email.strip().lower() == ADMIN_EMAIL.lower() and password == ADMIN_PASSWORD
 
-# Register user with email verification
 def register_user(name, email, password, code):
+    # Register a new user with email verification
     email = email.strip().lower()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
     try:
         # Check if user already exists
-        c.execute("SELECT * FROM users WHERE email=?", (email,))
-        if c.fetchone() is not None:
+        if users_collection.find_one({"email": email}):
             return False
+        
         # Insert new user
-        c.execute("INSERT INTO users (name, email, password, code, is_verified) VALUES (?, ?, ?, ?, 0)", 
-                 (name, email, password, code))
-        conn.commit()
+        user = {
+            "name": name,
+            "email": email,
+            "password": password,
+            "code": code,
+            "is_verified": 0,
+            "created_at": datetime.now()
+        }
+        users_collection.insert_one(user)
         return True
-    except sqlite3.Error as e:
+    except Exception as e:
         print("Registration error:", e)
         return False
-    finally:
-        conn.close()
 
-# Send code to email and store it in the database
 def send_code_and_store(email):
+    # Send verification code to email and store it
     code = generate_code()
     if send_verification_email(email, code):
         update_verification_code(email, code)
         return True
     return False
 
-# Save verification code into database
 def update_verification_code(email, code):
+    # Update verification code in database
     email = email.strip().lower()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
     
-    # If user doesn't exist yet, create a new record
-    c.execute("SELECT * FROM users WHERE email=?", (email,))
-    if c.fetchone() is None:
-        c.execute("INSERT INTO users (email, code, is_verified) VALUES (?, ?, 0)", (email, code))
+    # Create new user record if doesn't exist
+    user = users_collection.find_one({"email": email})
+    if not user:
+        users_collection.insert_one({
+            "email": email,
+            "code": code,
+            "is_verified": 0
+        })
     else:
-        c.execute("UPDATE users SET code=?, is_verified=0 WHERE email=?", (code, email))
-    
-    conn.commit()
-    conn.close()
+        users_collection.update_one(
+            {"email": email},
+            {"$set": {"code": code, "is_verified": 0}}
+        )
 
-# Verify code from user input
 def verify_user(email, input_code):
+    # Verify user's email with input code
     email = email.strip().lower()
     input_code = input_code.strip()
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT code FROM users WHERE email=?", (email,))
-    row = c.fetchone()
-
+    user = users_collection.find_one({"email": email})
+    
     print(f"Verify attempt for email: {email}, input code: {input_code}")
-    print("Query result:", row)
+    print("Query result:", user)
 
-    if row and row[0] == input_code:
-        c.execute("UPDATE users SET is_verified=1 WHERE email=?", (email,))
-        conn.commit()
-        conn.close()
+    if user and user.get("code") == input_code:
+        users_collection.update_one(
+            {"email": email},
+            {"$set": {"is_verified": 1}}
+        )
         return True
-
-    conn.close()
     return False
 
-# Check if email is already registered
 def email_exists(email):
+    # Check if email is already registered
     email = email.strip().lower()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT 1 FROM users WHERE email=?", (email,))
-    exists = c.fetchone() is not None
-    conn.close()
-    return exists
+    return users_collection.find_one({"email": email}) is not None
 
-# Login with email + password, only if verified
 def login_user(email, password):
+    # Login user with email and password
     email = email.strip().lower()
-    # First check if it is admin
+    # Check admin first
     if is_admin(email, password):
         return {"role": "admin"}
-    # Then check the normal user
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT name, is_verified FROM users WHERE email=? AND password=?", (email, password))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        name, is_verified = row
-        if is_verified == 1:
-            return {"role": "user", "name": name, "email": email}
+    
+    # Then check regular user
+    user = users_collection.find_one({"email": email, "password": password})
+    if user:
+        if user.get("is_verified") == 1:
+            return {"role": "user", "name": user.get("name"), "email": email}
         else:
             return {"role": "unverified"}
     return {"role": "invalid"}
 
-def save_prediction(user_email, image_filename, predicted_class, confidence, top_predictions):
-    """Save user's prediction result to database"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+def save_prediction(user_email, image_filename, predicted_class, confidence, top_predictions, image_data):
+    """Save prediction with image data to MongoDB"""
     try:
-        # Get user ID
-        c.execute("SELECT id FROM users WHERE email = ?", (user_email,))
-        user_row = c.fetchone()
-        if not user_row:
-            return False
-        
-        user_id = user_row[0]
-        
-        # Convert top_predictions to JSON string for storage
-        import json
-        top_predictions_json = json.dumps(top_predictions)
-        
-        # Insert prediction record
-        c.execute("""
-            INSERT INTO predictions (user_id, image_filename, predicted_class, confidence, top_predictions)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, image_filename, predicted_class, confidence, top_predictions_json))
-        
-        conn.commit()
-        return True
-    except sqlite3.Error as e:
-        print("Save prediction error:", e)
-        return False
-    finally:
-        conn.close()
+        # Get user information
+        user = db.users.find_one({"email": user_email})
+        user_name = user.get('name') if user else None
 
-def get_user_predictions(user_email, limit=50):
-    """Get user's prediction history"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    try:
-        c.execute("""
-            SELECT p.id, p.image_filename, p.predicted_class, p.confidence, 
-                   p.top_predictions, p.created_at, u.name
-            FROM predictions p
-            JOIN users u ON p.user_id = u.id
-            WHERE u.email = ?
-            ORDER BY p.created_at DESC
-            LIMIT ?
-        """, (user_email, limit))
+        # Create prediction document
+        prediction = {
+            "user_email": user_email,
+            "user_name": user_name,
+            "image_filename": image_filename,
+            "image_data": image_data,
+            "predicted_class": predicted_class,
+            "confidence": confidence,
+            "top_predictions": json.dumps(top_predictions),
+            "created_at": datetime.now()
+        }
         
-        predictions = c.fetchall()
-        return predictions
-    except sqlite3.Error as e:
-        print("Get predictions error:", e)
+        # Insert into predictions collection
+        result = db.predictions.insert_one(prediction)
+        return result.inserted_id is not None
+        
+    except Exception as e:
+        print(f"Error saving prediction: {str(e)}")
+        return False
+
+def get_user_predictions(user_email):
+    """Get predictions for a specific user from MongoDB"""
+    try:
+        predictions = list(db.predictions.find(
+            {"user_email": user_email}
+        ).sort("created_at", -1))
+        
+        # Convert MongoDB documents to the expected format
+        formatted_predictions = []
+        for pred in predictions:
+            formatted_predictions.append([
+                str(pred['_id']),          # prediction ID (0)
+                pred['image_filename'],     # image filename (1)
+                pred['predicted_class'],    # predicted class (2)
+                pred['confidence'],         # confidence (3)
+                pred['top_predictions'],    # top predictions (4)
+                pred['created_at'],         # creation date (5)
+                pred.get('user_name', ''),  # user name (6)
+                pred.get('image_data', '')  # image data (7)
+            ])
+        
+        return formatted_predictions
+        
+    except Exception as e:
+        print(f"Error getting predictions: {e}")
         return []
-    finally:
-        conn.close()
 
 def delete_prediction(prediction_id, user_email):
-    """Delete specified prediction record (user can only delete their own)"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+    # Delete a prediction from MongoDB
     try:
-        # Verify user permissions
-        c.execute("""
-            SELECT p.id FROM predictions p
-            JOIN users u ON p.user_id = u.id
-            WHERE p.id = ? AND u.email = ?
-        """, (prediction_id, user_email))
+        # Debug information
+        print(f"Attempting to delete prediction: {prediction_id}")
+        print(f"User email: {user_email}")
         
-        if not c.fetchone():
+        # Convert string ID to ObjectId
+        object_id = ObjectId(prediction_id)
+        print(f"Converted ObjectId: {object_id}")
+        
+        # Find the prediction first to verify it exists
+        prediction = db.predictions.find_one({
+            "_id": object_id,
+            "user_email": user_email
+        })
+        
+        if prediction:
+            print("Found prediction to delete")
+            result = db.predictions.delete_one({
+                "_id": object_id,
+                "user_email": user_email
+            })
+            print(f"Delete result: {result.deleted_count}")
+            return result.deleted_count > 0
+        else:
+            print("Prediction not found")
             return False
         
-        # Delete record
-        c.execute("DELETE FROM predictions WHERE id = ?", (prediction_id,))
-        conn.commit()
-        return True
-    except sqlite3.Error as e:
-        print("Delete prediction error:", e)
+    except Exception as e:
+        print(f"Error deleting prediction: {e}")
         return False
-    finally:
-        conn.close()
 
-def get_all_user_predictions(limit=100):
-    """Get all users' prediction history for admin"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+def get_all_user_predictions():
+    # Get all predictions for admin view
     try:
-        c.execute("""
-            SELECT p.id, p.image_filename, p.predicted_class, p.confidence, 
-                   p.top_predictions, p.created_at, u.name, u.email
-            FROM predictions p
-            JOIN users u ON p.user_id = u.id
-            ORDER BY p.created_at DESC
-            LIMIT ?
-        """, (limit,))
+        predictions = list(db.predictions.find().sort("created_at", -1))
         
-        predictions = c.fetchall()
-        return predictions
-    except sqlite3.Error as e:
-        print("Get all predictions error:", e)
-        return []
-    finally:
-        conn.close()
-
-def get_user_predictions_by_email(user_email, limit=50):
-    """Get specific user's prediction history by email for admin"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    try:
-        c.execute("""
-            SELECT p.id, p.image_filename, p.predicted_class, p.confidence, 
-                   p.top_predictions, p.created_at, u.name, u.email
-            FROM predictions p
-            JOIN users u ON p.user_id = u.id
-            WHERE u.email = ?
-            ORDER BY p.created_at DESC
-            LIMIT ?
-        """, (user_email, limit))
+        # Convert MongoDB documents to the expected format
+        formatted_predictions = []
+        for pred in predictions:
+            formatted_predictions.append((
+                str(pred['_id']),  # prediction ID
+                pred['image_filename'],
+                pred['predicted_class'],
+                pred['confidence'],
+                pred['top_predictions'],
+                pred['created_at'],
+                pred['user_name'],
+                pred['user_email']
+            ))
         
-        predictions = c.fetchall()
-        return predictions
-    except sqlite3.Error as e:
-        print("Get user predictions by email error:", e)
+        return formatted_predictions
+        
+    except Exception as e:
+        print(f"Error getting all predictions: {e}")
         return []
-    finally:
-        conn.close()
